@@ -85,6 +85,8 @@ https://fastapi-app.icywave-1777a797.westeurope.azurecontainerapps.io
 http://localhost:8000/docs#/
 
 az acr create --resource-group TinyApps --name tinyappexptrack --sku Basic
+
+
 az acr login --name tinyappexptrack
 
 docker tag my-fastapi-app tinyappexptrack.azurecr.io/my-fastapi-app:latest
@@ -103,3 +105,24 @@ az containerapp create `
 
 https://fastapi-app.wittysand-ac101e81.westeurope.azurecontainerapps.io
 https://fastapi-app.wittysand-ac101e81.westeurope.azurecontainerapps.io/docs
+
+
+
+# -> to be done for new push to Azure
+# --------------------------------------
+
+# from your backend repo root
+docker build -t my-fastapi-app:$(git rev-parse --short HEAD) .
+# if you’re on Apple Silicon and your base image is amd64:
+# docker build --platform linux/amd64 -t my-fastapi-app:$(git rev-parse --short HEAD) .
+
+az acr login --name tinyappexptrack
+
+TAG=$(git rev-parse --short HEAD)
+docker tag my-fastapi-app:$TAG tinyappexptrack.azurecr.io/my-fastapi-app:$TAG
+docker push tinyappexptrack.azurecr.io/my-fastapi-app:$TAG
+
+az containerapp update \
+  --name expense-tracker-api \
+  --resource-group TinyApps \
+  --image tinyappexptrack.azurecr.io/my-fastapi-app:$TAG

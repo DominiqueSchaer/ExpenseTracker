@@ -6,7 +6,7 @@
   <title>Mila Expense Tracker</title>
 
   <!-- Update this to your backend URL in production , http://localhost:8000 vs https://fastapi-app.wittysand-ac101e81.westeurope.azurecontainerapps.io -->
-  <meta name="api-base" content="https://fastapi-app.wittysand-ac101e81.westeurope.azurecontainerapps.io">
+  <meta name="api-base" content="http://localhost:8000">
 
   <link href="static/output.css" rel="stylesheet" />
   <script src="https://unpkg.com/htmx.org@1.9.10"></script>
@@ -33,39 +33,40 @@
 
   <main class="max-w-6xl mx-auto p-4 sm:p-6">
 
-    <!-- ===== Summary row (NEW) ===== -->
-    <section id="summaryContainer" class="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4 mb-6">
-      <!-- skeleton -->
+    <!-- ===== Summary row ===== -->
+    <section id="summaryContainer" class="grid grid-cols-1 md:grid-cols-3 gap-3 sm:gap-4 mb-6">
+      <!-- skeleton (3 cards) -->
       <div class="rounded-2xl border bg-white/80 p-4">
-        <div class="text-xs text-slate-500">Total</div>
+        <div class="text-xs text-slate-500">MaPi approved</div>
         <div class="mt-1 h-6 bg-slate-100 rounded"></div>
       </div>
       <div class="rounded-2xl border bg-white/80 p-4">
-        <div class="text-xs text-slate-500">Pending</div>
+        <div class="text-xs text-slate-500">Mila approved</div>
         <div class="mt-1 h-6 bg-slate-100 rounded"></div>
       </div>
       <div class="rounded-2xl border bg-white/80 p-4">
-        <div class="text-xs text-slate-500">Approved</div>
-        <div class="mt-1 h-6 bg-slate-100 rounded"></div>
-      </div>
-      <div class="rounded-2xl border bg-white/80 p-4">
-        <div class="text-xs text-slate-500">Reimbursed</div>
+        <div class="text-xs text-slate-500">Net (Mila)</div>
         <div class="mt-1 h-6 bg-slate-100 rounded"></div>
       </div>
     </section>
 
     <section class="grid lg:grid-cols-2 gap-6">
-      <!-- Expenses list -->
+      <!-- Expenses list (scrollable, infinite scroll) -->
       <div class="rounded-3xl border bg-white shadow-sm">
         <div class="px-5 py-4 border-b">
           <h2 class="text-base sm:text-lg font-medium">Expenses</h2>
         </div>
-        <div id="expensesContainer" class="p-4 sm:p-5 space-y-3">
-          <div class="text-sm text-slate-500">Loading…</div>
+        <!-- Set a max height so ~5 cards are visible; enable vertical scrolling -->
+        <div id="expensesScroller" class="max-h-[38rem] overflow-y-auto">
+          <div id="expensesContainer" class="p-4 sm:p-5 space-y-3">
+            <div class="text-sm text-slate-500">Loading…</div>
+          </div>
+          <!-- Sentinel for infinite scroll -->
+          <div id="scrollSentinel" class="h-8"></div>
         </div>
       </div>
 
-      <!-- Forms: add + reimburse -->
+      <!-- Forms: add -->
       <div class="rounded-3xl border bg-white shadow-sm">
         <div class="px-5 py-4 border-b">
           <h2 class="text-base sm:text-lg font-medium">Actions</h2>
@@ -83,6 +84,12 @@
                      class="w-full rounded-xl border px-3 py-2.5 text-sm outline-none focus:ring-2 ring-blue-600/20 focus:border-blue-600" />
               <input name="amount" type="number" step="0.01" placeholder="Amount" required
                      class="w-full rounded-xl border px-3 py-2.5 text-sm outline-none focus:ring-2 ring-blue-600/20 focus:border-blue-600" />
+              <select name="claimed_by" id="claimedBy" required
+                      class="w-full rounded-xl border px-3 py-2.5 text-sm outline-none focus:ring-2 ring-blue-600/20 focus:border-blue-600">
+                <option value="Mila" selected>Mila</option>
+                <option value="MaPi">MaPi</option>
+              </select>
+
               <div class="flex gap-2">
                 <button type="submit"
                         class="inline-flex items-center gap-1.5 rounded-xl bg-blue-600 text-white px-4 py-2.5 text-sm font-medium shadow-sm hover:bg-blue-700 active:bg-blue-800 transition">
@@ -97,32 +104,20 @@
             </form>
           </div>
 
-          <!-- Reimburse -->
-          <div>
-            <h3 class="text-sm font-semibold text-slate-700 mb-3">Reimburse</h3>
-            <form id="reimburseForm" class="flex gap-2">
-              <input name="amount" type="number" step="0.01" placeholder="Amount" required
-                     class="flex-1 rounded-xl border px-3 py-2.5 text-sm outline-none focus:ring-2 ring-green-600/20 focus:border-green-600" />
-              <button type="submit"
-                      class="rounded-xl bg-green-600 text-white px-4 py-2.5 text-sm font-medium shadow-sm hover:bg-green-700 active:bg-green-800 transition">
-                Reimburse
-              </button>
-            </form>
-            <div id="reimburseMessage" class="text-sm mt-2 h-5"></div>
-          </div>
+          <!-- Reimburse UI intentionally removed for Step 1 -->
         </div>
       </div>
     </section>
 
     <footer class="mt-8 text-xs text-slate-500 text-center">
-      App in a day by Chnüppi
+      App-In-A-Day by Chnüppi
     </footer>
   </main>
 
   <script>
     // ===== Utilities =====
     const apiBase = document.querySelector('meta[name="api-base"]').content.replace(/\/$/, '');
-    const EUR = (n) => `${Number(n || 0).toFixed(2)} €`;
+    const CHF = (n) => `${Number(n ?? 0).toFixed(2)} CHF`;
     const todayISO = () => new Date().toISOString().slice(0, 10);
 
     async function api(path, opts = {}) {
@@ -137,56 +132,73 @@
       return res.json();
     }
 
-    // ===== Summary (NEW) =====
-    function computeSummary(items) {
-      const sum = (arr) => arr.reduce((a, b) => a + Number(b.amount || 0), 0);
-      const byStatus = {
-        pending: items.filter(x => x.status === 'pending'),
-        approved: items.filter(x => x.status === 'approved'),
-        reimbursed: items.filter(x => x.status === 'reimbursed'),
-      };
-      return {
-        total: sum(items),
-        pending: { count: byStatus.pending.length, amount: sum(byStatus.pending) },
-        approved: { count: byStatus.approved.length, amount: sum(byStatus.approved) },
-        reimbursed: { count: byStatus.reimbursed.length, amount: sum(byStatus.reimbursed) },
-      };
+    function escapeHtml(s) {
+      if (s === undefined || s === null) return '';
+      return String(s).replace(/[&<>"']/g, (m) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[m]));
     }
 
+    // ===== Summary from backend =====
     function renderSummary(s) {
-      const card = (label, value, sub, color) => `
+      const card = (label, value, sub, color = '') => `
         <div class="rounded-2xl border bg-white/80 p-4">
           <div class="text-xs text-slate-500">${label}</div>
           <div class="mt-1 text-lg font-semibold ${color} tabular-nums">${value}</div>
           ${sub ? `<div class="text-xs text-slate-500 mt-0.5">${sub}</div>` : ''}
         </div>
       `;
+      const net = Number(s.net_balance_for_mila || 0);
+      const dirText = net >= 0 ? 'Mila owes MaPi' : 'MaPi owes Mila';
+      const netAbs = Math.abs(net);
+
       return [
-        card('Total', EUR(s.total), ''),
-        card('Pending', EUR(s.pending.amount), `${s.pending.count} item(s)`, 'text-amber-700'),
-        card('Approved', EUR(s.approved.amount), `${s.approved.count} item(s)`, 'text-blue-700'),
-        card('Reimbursed', EUR(s.reimbursed.amount), `${s.reimbursed.count} item(s)`, 'text-green-700'),
+        card('MaPi approved', CHF(s.approved_total_mapi_claims), ''),
+        card('Mila approved', CHF(s.approved_total_mila_claims), ''),
+        card('Net (Mila)', CHF(netAbs), dirText, net >= 0 ? 'text-amber-700' : 'text-green-700'),
       ].join('');
     }
 
-    function updateSummary(items) {
-      const s = computeSummary(items);
-      document.getElementById('summaryContainer').innerHTML = renderSummary(s);
+    async function loadSummary() {
+      try {
+        const s = await api('/api/summary');
+        document.getElementById('summaryContainer').innerHTML = renderSummary(s);
+      } catch (err) {
+        console.warn('Summary load failed:', err);
+        // keep skeleton on error
+      }
     }
 
-    // ===== Expenses =====
+    // ===== Expenses: paginated infinite scroll =====
+    const PAGE_SIZE = 10;  // server batch size
+    let offset = 0;
+    let loading = false;
+    let noMore = false;
+
+    function clearExpenses() {
+      offset = 0;
+      loading = false;
+      noMore = false;
+      const container = document.getElementById('expensesContainer');
+      container.innerHTML = '';
+      delete container.dataset.loadedOnce;
+    }
+
     function renderExpenseItem(exp) {
       const statusBadge =
         exp.status === 'approved'
-          ? '<span class="text-amber-800 bg-amber-100 px-2 py-0.5 rounded-full text-xs">Approved</span>'
-          : exp.status === 'reimbursed'
-          ? '<span class="text-green-800 bg-green-100 px-2 py-0.5 rounded-full text-xs">Reimbursed</span>'
+          ? '<span class="text-blue-800 bg-blue-100 px-2 py-0.5 rounded-full text-xs">Approved</span>'
+          : exp.status === 'rejected'
+          ? '<span class="text-rose-800 bg-rose-100 px-2 py-0.5 rounded-full text-xs">Rejected</span>'
           : '<span class="text-slate-700 bg-slate-100 px-2 py-0.5 rounded-full text-xs">Pending</span>';
 
-      const approveBtn =
-        exp.status === 'pending'
-          ? `<button data-id="${exp.id}" class="approveBtn rounded-lg bg-blue-600 text-white px-3 py-1.5 text-xs font-medium shadow-sm hover:bg-blue-700 active:bg-blue-800 transition">Approve</button>`
-          : '';
+      const canModerate = exp.status === 'pending' && exp.claimed_by === 'Mila';
+
+      const actions = canModerate
+        ? `
+          <div class="flex gap-2">
+            <button data-id="${exp.id}" class="approveBtn rounded-lg bg-blue-600 text-white px-3 py-1.5 text-xs font-medium shadow-sm hover:bg-blue-700 active:bg-blue-800 transition">Approve</button>
+            <button data-id="${exp.id}" class="rejectBtn rounded-lg border px-3 py-1.5 text-xs font-medium hover:bg-slate-50 active:bg-slate-100 transition">Reject</button>
+          </div>`
+        : '';
 
       return `
         <div class="rounded-2xl border p-4 sm:p-5 bg-white/80 backdrop-blur shadow-sm">
@@ -196,52 +208,109 @@
                 <div class="font-medium truncate">${escapeHtml(exp.description)}</div>
                 ${statusBadge}
               </div>
-              <div class="text-xs text-slate-500 mt-1">By: ${escapeHtml(exp.submittedBy || 'Mila')} • ${escapeHtml(exp.date)}</div>
+              <div class="text-xs text-slate-500 mt-1">By: ${escapeHtml(exp.claimed_by || 'Mila')} • ${escapeHtml(exp.date)}</div>
             </div>
             <div class="text-right">
-              <div class="text-lg font-semibold tabular-nums">${EUR(exp.amount)}</div>
-              <div class="mt-2">${approveBtn}</div>
+              <div class="text-lg font-semibold tabular-nums">${CHF(exp.amount)}</div>
+              <div class="mt-2">${actions}</div>
             </div>
           </div>
         </div>
       `;
     }
 
-    function escapeHtml(s) {
-      if (s === undefined || s === null) return '';
-      return String(s).replace(/[&<>"']/g, (m) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[m]));
+    function attachRowHandlers(scopeEl) {
+      scopeEl.querySelectorAll('.approveBtn').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+          const id = e.currentTarget.dataset.id;
+          e.currentTarget.disabled = true;
+          try {
+            await api(`/api/expenses/${id}/approve`, { method: 'POST' });
+            await reloadExpenses();
+          } catch (err) {
+            alert('Approve failed: ' + err.message);
+            e.currentTarget.disabled = false;
+          }
+        });
+      });
+
+      scopeEl.querySelectorAll('.rejectBtn').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+          const id = e.currentTarget.dataset.id;
+          e.currentTarget.disabled = true;
+          try {
+            await api(`/api/expenses/${id}/reject`, { method: 'POST' });
+            await reloadExpenses();
+          } catch (err) {
+            alert('Reject failed: ' + err.message);
+            e.currentTarget.disabled = false;
+          }
+        });
+      });
     }
 
-    async function loadExpenses() {
+    async function loadMoreExpenses() {
+      if (loading || noMore) return;
+      loading = true;
+
       const container = document.getElementById('expensesContainer');
-      container.innerHTML = '<div class="text-sm text-slate-500">Loading…</div>';
+      if (offset === 0 && !container.dataset.loadedOnce) {
+        container.innerHTML = '<div class="text-sm text-slate-500">Loading…</div>';
+      }
+
       try {
-        const data = await api('/api/expenses');
-        // --- Summary update (NEW) ---
-        updateSummary(Array.isArray(data) ? data : []);
-        // --- List rendering ---
+        const data = await api(`/api/expenses?limit=${PAGE_SIZE}&offset=${offset}`);
+        if (offset === 0) container.innerHTML = '';
+
         if (!Array.isArray(data) || data.length === 0) {
-          container.innerHTML = '<div class="text-sm text-slate-500">No expenses yet.</div>';
+          if (offset === 0) container.innerHTML = '<div class="text-sm text-slate-500">No expenses yet.</div>';
+          noMore = true;
           return;
         }
-        container.innerHTML = data.map(renderExpenseItem).join('');
-        document.querySelectorAll('.approveBtn').forEach(btn => {
-          btn.addEventListener('click', async (e) => {
-            const id = e.currentTarget.dataset.id;
-            e.currentTarget.disabled = true;
-            try {
-              await api(`/api/expenses/${id}/approve`, { method: 'POST' });
-              await loadExpenses();
-            } catch (err) {
-              alert('Approve failed: ' + err.message);
-              e.currentTarget.disabled = false;
-            }
-          });
-        });
+
+        container.insertAdjacentHTML('beforeend', data.map(renderExpenseItem).join(''));
+        attachRowHandlers(container);
+
+        offset += data.length;
+        container.dataset.loadedOnce = '1';
+
+        loadSummary();
+
+        if (data.length < PAGE_SIZE) {
+          noMore = true;
+        }
       } catch (err) {
-        container.innerHTML = `<div class="text-sm text-red-600">Error: ${escapeHtml(err.message)}</div>`;
-        // keep whatever summary was shown before
+        const msg = `Error loading expenses: ${escapeHtml(err.message)}`;
+        if (offset === 0) {
+          container.innerHTML = `<div class="text-sm text-red-600">${msg}</div>`;
+        } else {
+          container.insertAdjacentHTML('beforeend', `<div class="text-xs text-red-600">${msg}</div>`);
+        }
+      } finally {
+        loading = false;
       }
+    }
+
+    async function reloadExpenses() {
+      clearExpenses();
+      await loadMoreExpenses();
+    }
+
+    function initInfiniteScroll() {
+      const scroller = document.getElementById('expensesScroller');
+      const sentinel = document.getElementById('scrollSentinel');
+
+      const io = new IntersectionObserver(async (entries) => {
+        const entry = entries[0];
+        if (entry.isIntersecting) {
+          await loadMoreExpenses();
+        }
+      }, {
+        root: scroller,
+        threshold: 0.1
+      });
+
+      io.observe(sentinel);
     }
 
     // ===== Forms =====
@@ -251,7 +320,8 @@
       const data = {
         date: form.date.value,
         description: form.description.value,
-        amount: parseFloat(form.amount.value),
+        amount: form.amount.value,     // send as string to preserve decimals
+        claimed_by: form.claimed_by.value,
       };
       const msg = document.getElementById('addMessage');
       msg.textContent = 'Adding…';
@@ -260,9 +330,9 @@
         await api('/api/expenses', { method: 'POST', body: JSON.stringify(data) });
         msg.textContent = 'Added.';
         form.reset();
-        // keep the date default to today after reset
         document.getElementById('dateInput').value = todayISO();
-        await loadExpenses();
+        document.getElementById('claimedBy').value = 'Mila';
+        await reloadExpenses();
       } catch (err) {
         msg.textContent = 'Error: ' + err.message;
         msg.classList.add('text-red-600');
@@ -273,38 +343,24 @@
     document.getElementById('clearForm').addEventListener('click', () => {
       const form = document.getElementById('addForm');
       form.reset();
-      document.getElementById('dateInput').value = todayISO(); // restore today
-    });
-
-    document.getElementById('reimburseForm').addEventListener('submit', async (ev) => {
-      ev.preventDefault();
-      const form = ev.target;
-      const amount = parseFloat(form.amount.value);
-      const msg = document.getElementById('reimburseMessage');
-      msg.textContent = 'Processing…';
-      msg.classList.remove('text-red-600');
-      try {
-        const res = await api('/api/reimburse', { method: 'POST', body: JSON.stringify({ amount }) });
-        msg.textContent = `Remaining: ${EUR(res.remaining)}`;
-        form.reset();
-        await loadExpenses();
-      } catch (err) {
-        msg.textContent = 'Error: ' + err.message;
-        msg.classList.add('text-red-600');
-      }
-      setTimeout(() => { msg.textContent = ''; msg.classList.remove('text-red-600'); }, 5000);
+      document.getElementById('dateInput').value = todayISO();
+      document.getElementById('claimedBy').value = 'Mila';
     });
 
     // refresh button
-    document.getElementById('refreshBtn').addEventListener('click', loadExpenses);
+    document.getElementById('refreshBtn').addEventListener('click', async () => {
+      await reloadExpenses();
+      await loadSummary();
+    });
 
     // ===== init =====
-    window.addEventListener('DOMContentLoaded', () => {
-      // Set default date to today
+    window.addEventListener('DOMContentLoaded', async () => {
       const dateEl = document.getElementById('dateInput');
       if (dateEl && !dateEl.value) dateEl.value = todayISO();
-      // Load data
-      loadExpenses();
+
+      initInfiniteScroll();
+      await reloadExpenses(); // loads first 10; ~5 visible due to height
+      await loadSummary();
     });
   </script>
 </body>
