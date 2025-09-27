@@ -1,0 +1,20 @@
+{
+  "name": "frontend-htmx",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "dev:css": "npx @tailwindcss/cli -i ./static/styles.css -o ./static/output.css --watch",
+    "build:css": "npx @tailwindcss/cli -i ./static/styles.css -o ./static/output.css",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "tailwindcss": "^4.1.13"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.1.13"
+  }
+}
