@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .routers.expenses import router as expenses_router
+from app.routers.expenses import router as expenses_router
 
 app = FastAPI(title="Mila Expense Tracker API")
 

@@ -1,0 +1,372 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Mila Expense Tracker</title>
+
+  <!-- Update this to your backend URL in production , http://localhost:8000 vs https://expense-tracker-api.wittysand-ac101e81.westeurope.azurecontainerapps.io/ -->
+  <meta name="api-base" content="https://expense-tracker-api.wittysand-ac101e81.westeurope.azurecontainerapps.io/">
+
+  <link href="static/output.css" rel="stylesheet" />
+  <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+  <style>
+    :root {
+      --readonly-border-color: rgba(6, 44, 106, 0.35);
+    }
+    .readonly-frame {
+      border-color: var(--readonly-border-color);
+    }
+    .readonly-border-accent {
+      border-color: var(--readonly-border-color);
+    }
+  </style>
+</head>
+<body class="bg-gradient-to-b from-slate-50 to-white min-h-screen text-slate-800">
+  <!-- Top bar -->
+  <header class="border-b bg-white/80 backdrop-blur">
+    <div class="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="size-9 rounded-2xl bg-blue-600/10 grid place-items-center">
+          <span class="text-blue-700 font-semibold">M</span>
+        </div>
+        <div>
+          <h1 class="text-lg sm:text-xl font-semibold tracking-tight">Mila Expense Tracker</h1>
+          <p class="text-xs text-slate-500">Family Dashboard</p>
+        </div>
+      </div>
+      <button id="refreshBtn"
+              class="text-sm px-3 py-1.5 rounded-lg border bg-white hover:bg-slate-50 active:bg-slate-100 transition">
+        Refresh
+      </button>
+    </div>
+  </header>
+
+  <main class="max-w-6xl mx-auto p-4 sm:p-6">
+
+    <!-- ===== Summary row ===== -->
+    <section id="summaryContainer" class="grid grid-cols-1 md:grid-cols-2 gap-3 sm:gap-4 mb-6">
+      <!-- skeleton (2 cards) -->
+      <div class="rounded-2xl border bg-white/80 p-4 readonly-frame">
+        <div class="text-xs text-slate-500">Net (Mila)</div>
+        <div class="mt-1 h-6 bg-slate-100 rounded"></div>
+      </div>
+      <div class="rounded-2xl border bg-white/80 p-4 readonly-frame">
+        <div class="text-xs text-slate-500">Pending approvals</div>
+        <div class="mt-1 h-6 bg-slate-100 rounded"></div>
+      </div>
+    </section>
+
+
+    <section class="grid lg:grid-cols-2 gap-6">
+      <!-- Expenses list (scrollable, infinite scroll) -->
+      <div class="rounded-3xl border bg-white shadow-sm readonly-frame">
+        <div class="px-5 py-4 border-b readonly-border-accent">
+          <h2 class="text-base sm:text-lg font-medium">Expenses</h2>
+        </div>
+        <!-- Set a max height so ~5 cards are visible; enable vertical scrolling -->
+        <div id="expensesScroller" class="max-h-[38rem] overflow-y-auto">
+          <div id="expensesContainer" class="p-4 sm:p-5 space-y-3">
+            <div class="text-sm text-slate-500">Loading...</div>
+          </div>
+          <!-- Sentinel for infinite scroll -->
+          <div id="scrollSentinel" class="h-8"></div>
+        </div>
+      </div>
+
+      <!-- Forms: add -->
+      <div class="rounded-3xl border bg-white shadow-sm readonly-frame">
+        <div class="px-5 py-4 border-b readonly-border-accent">
+          <h2 class="text-base sm:text-lg font-medium">Actions</h2>
+        </div>
+
+        <div class="p-4 sm:p-5 space-y-8">
+          <!-- Add -->
+          <div>
+            <h3 class="text-sm font-semibold text-slate-700 mb-3">Add Expense</h3>
+            <form id="addForm" class="space-y-3">
+              <!-- default date set via JS -->
+              <input name="date" id="dateInput" type="date" required
+                     class="w-full rounded-xl border px-3 py-2.5 text-sm outline-none focus:ring-2 ring-blue-600/20 focus:border-blue-600" />
+              <input name="description" type="text" placeholder="Description" required
+                     class="w-full rounded-xl border px-3 py-2.5 text-sm outline-none focus:ring-2 ring-blue-600/20 focus:border-blue-600" />
+              <input name="amount" type="number" step="0.01" placeholder="Amount" required
+                     class="w-full rounded-xl border px-3 py-2.5 text-sm outline-none focus:ring-2 ring-blue-600/20 focus:border-blue-600" />
+              <select name="claimed_by" id="claimedBy" required
+                      class="w-full rounded-xl border px-3 py-2.5 text-sm outline-none focus:ring-2 ring-blue-600/20 focus:border-blue-600">
+                <option value="Mila" selected>Mila</option>
+                <option value="MaPi">MaPi</option>
+              </select>
+
+              <div class="flex gap-2">
+                <button type="submit"
+                        class="inline-flex items-center gap-1.5 rounded-xl bg-blue-600 text-white px-4 py-2.5 text-sm font-medium shadow-sm hover:bg-blue-700 active:bg-blue-800 transition">
+                  Add
+                </button>
+                <button type="button" id="clearForm"
+                        class="inline-flex items-center gap-1.5 rounded-xl border px-4 py-2.5 text-sm hover:bg-slate-50 active:bg-slate-100 transition">
+                  Clear
+                </button>
+              </div>
+              <div id="addMessage" class="text-sm mt-1 h-5"></div>
+            </form>
+          </div>
+
+          <!-- Reimburse UI intentionally removed for Step 1 -->
+        </div>
+      </div>
+    </section>
+
+    <footer class="mt-8 text-xs text-slate-500 text-center">
+      App-In-A-Day by Chnüppi
+    </footer>
+  </main>
+
+  <script>
+    // ===== Utilities =====
+    const READONLY_BORDER_VARIANTS = {
+      blue: 'rgba(59, 130, 246, 0.35)',
+      slate: 'rgba(148, 163, 184, 0.45)',
+      violet: 'rgba(139, 92, 246, 0.35)',
+      emerald: 'rgba(16, 185, 129, 0.35)',
+      amber: 'rgba(251, 191, 36, 0.35)',
+    };
+
+    function applyReadonlyBorderColor(candidate) {
+      const root = document.documentElement;
+      if (!candidate || candidate === 'default') {
+        root.style.removeProperty('--readonly-border-color');
+        root.dataset.readonlyBorder = 'default';
+        return 'default';
+      }
+      const key = candidate.trim().toLowerCase();
+      const resolved = READONLY_BORDER_VARIANTS[key] || candidate;
+      root.style.setProperty('--readonly-border-color', resolved);
+      root.dataset.readonlyBorder = READONLY_BORDER_VARIANTS[key] ? key : 'custom';
+      return root.dataset.readonlyBorder;
+    }
+
+    (function initReadonlyBorderTester() {
+      // Quick tester: use ?border=violet or setReadonlyBorderColor('#e2e8f0')
+      const params = new URLSearchParams(window.location.search);
+      const initial = params.get('border');
+      if (initial) {
+        applyReadonlyBorderColor(initial);
+      } else {
+        document.documentElement.dataset.readonlyBorder = 'default';
+      }
+      window.setReadonlyBorderColor = applyReadonlyBorderColor;
+      console.info('Readonly border variants:', Object.keys(READONLY_BORDER_VARIANTS).join(', '));
+    }());
+
+    const apiBase = document.querySelector('meta[name="api-base"]').content.replace(/\/$/, '');
+    const CHF = (n) => `${Number(n ?? 0).toFixed(2)} CHF`;
+    const todayISO = () => new Date().toISOString().slice(0, 10);
+
+    async function api(path, opts = {}) {
+      const res = await fetch(apiBase + path, {
+        headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
+        ...opts,
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(res.status + ' ' + text);
+      }
+      return res.json();
+    }
+
+    function escapeHtml(s) {
+      if (s === undefined || s === null) return '';
+      return String(s).replace(/[&<>"']/g, (m) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[m]));
+    }
+
+    // ===== Summary from backend =====
+    function renderSummary(s) {
+      const card = (label, value, sub, color = '') => `
+        <div class="rounded-2xl border bg-white/80 p-4 readonly-frame">
+          <div class="text-xs text-slate-500">${label}</div>
+          <div class="mt-1 text-lg font-semibold ${color} tabular-nums">${value}</div>
+          ${sub ? `<div class="text-xs text-slate-500 mt-0.5">${sub}</div>` : ''}
+        </div>
+      `;
+
+      const net = Number(s.net_balance_for_mila || 0);
+      const dirText = net >= 0 ? 'Mila owes MaPi' : 'MaPi owes Mila';
+      const netAbs = Math.abs(net);
+
+      return [
+        card('Net (Mila)', CHF(netAbs), dirText, net >= 0 ? 'text-amber-700' : 'text-green-700'),
+        card(
+          'Pending approvals',
+          CHF(s.pending_total_mila_claims || 0),
+          s.pending_count_mila_claims != null ? `${s.pending_count_mila_claims} item(s)` : 'Mila claims awaiting approval'
+        ),
+      ].join('');
+    }
+
+    async function loadSummary() {
+      try {
+        const s = await api('/api/summary');
+        document.getElementById('summaryContainer').innerHTML = renderSummary(s);
+      } catch (err) {
+        console.warn('Summary load failed:', err);
+      }
+    }
+
+    // ===== Expenses: paginated infinite scroll =====
+    const PAGE_SIZE = 10;  // server batch size
+    let offset = 0;
+    let loading = false;
+    let noMore = false;
+
+    function clearExpenses() {
+      offset = 0;
+      loading = false;
+      noMore = false;
+      const container = document.getElementById('expensesContainer');
+      container.innerHTML = '';
+      delete container.dataset.loadedOnce;
+    }
+
+    function renderExpenseItem(exp) {
+      const statusBadge =
+        exp.status === 'approved'
+          ? '<span class="text-blue-800 bg-blue-100 px-2 py-0.5 rounded-full text-xs">Approved</span>'
+          : exp.status === 'rejected'
+          ? '<span class="text-rose-800 bg-rose-100 px-2 py-0.5 rounded-full text-xs">Rejected</span>'
+          : '<span class="text-slate-700 bg-slate-100 px-2 py-0.5 rounded-full text-xs">Pending</span>';
+
+      return `
+        <div class="rounded-2xl border p-4 sm:p-5 bg-white/80 backdrop-blur shadow-sm readonly-frame">
+          <div class="flex items-start justify-between gap-4">
+            <div class="min-w-0">
+              <div class="flex items-center gap-2">
+                <div class="font-medium truncate">${escapeHtml(exp.description)}</div>
+                ${statusBadge}
+              </div>
+              <div class="text-xs text-slate-500 mt-1">By: ${escapeHtml(exp.claimed_by || 'Mila')} | ${escapeHtml(exp.date)}</div>
+            </div>
+            <div class="text-right">
+              <div class="text-lg font-semibold tabular-nums">${CHF(exp.amount)}</div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    async function loadMoreExpenses() {
+      if (loading || noMore) return;
+      loading = true;
+
+      const container = document.getElementById('expensesContainer');
+      if (offset === 0 && !container.dataset.loadedOnce) {
+        container.innerHTML = '<div class="text-sm text-slate-500">Loading...</div>';
+      }
+
+      try {
+        const data = await api(`/api/expenses?limit=${PAGE_SIZE}&offset=${offset}`);
+        if (offset === 0) container.innerHTML = '';
+
+        if (!Array.isArray(data) || data.length === 0) {
+          if (offset === 0) container.innerHTML = '<div class="text-sm text-slate-500">No expenses yet.</div>';
+          noMore = true;
+          return;
+        }
+
+        container.insertAdjacentHTML('beforeend', data.map(renderExpenseItem).join(''));
+
+        offset += data.length;
+        container.dataset.loadedOnce = '1';
+
+        loadSummary();
+
+        if (data.length < PAGE_SIZE) {
+          noMore = true;
+        }
+      } catch (err) {
+        const msg = `Error loading expenses: ${escapeHtml(err.message)}`;
+        if (offset === 0) {
+          container.innerHTML = `<div class="text-sm text-red-600">${msg}</div>`;
+        } else {
+          container.insertAdjacentHTML('beforeend', `<div class="text-xs text-red-600">${msg}</div>`);
+        }
+      } finally {
+        loading = false;
+      }
+    }
+
+    async function reloadExpenses() {
+      clearExpenses();
+      await loadMoreExpenses();
+    }
+
+    function initInfiniteScroll() {
+      const scroller = document.getElementById('expensesScroller');
+      const sentinel = document.getElementById('scrollSentinel');
+
+      const io = new IntersectionObserver(async (entries) => {
+        const entry = entries[0];
+        if (entry.isIntersecting) {
+          await loadMoreExpenses();
+        }
+      }, {
+        root: scroller,
+        threshold: 0.1
+      });
+
+      io.observe(sentinel);
+    }
+
+    // ===== Forms =====
+    document.getElementById('addForm').addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const form = ev.target;
+      const data = {
+        date: form.date.value,
+        description: form.description.value,
+        amount: form.amount.value,     // send as string to preserve decimals
+        claimed_by: form.claimed_by.value,
+      };
+      const msg = document.getElementById('addMessage');
+      msg.textContent = 'Adding...';
+      msg.classList.remove('text-red-600');
+      try {
+        await api('/api/expenses', { method: 'POST', body: JSON.stringify(data) });
+        msg.textContent = 'Added.';
+        form.reset();
+        document.getElementById('dateInput').value = todayISO();
+        document.getElementById('claimedBy').value = 'Mila';
+        await reloadExpenses();
+      } catch (err) {
+        msg.textContent = 'Error: ' + err.message;
+        msg.classList.add('text-red-600');
+      }
+      setTimeout(() => { msg.textContent = ''; msg.classList.remove('text-red-600'); }, 3000);
+    });
+
+    document.getElementById('clearForm').addEventListener('click', () => {
+      const form = document.getElementById('addForm');
+      form.reset();
+      document.getElementById('dateInput').value = todayISO();
+      document.getElementById('claimedBy').value = 'Mila';
+    });
+
+    // refresh button
+    document.getElementById('refreshBtn').addEventListener('click', async () => {
+      await reloadExpenses();
+      await loadSummary();
+    });
+
+    // ===== init =====
+    window.addEventListener('DOMContentLoaded', async () => {
+      const dateEl = document.getElementById('dateInput');
+      if (dateEl && !dateEl.value) dateEl.value = todayISO();
+
+      initInfiniteScroll();
+      await reloadExpenses(); // loads first 10; ~5 visible due to height
+      await loadSummary();
+    });
+  </script>
+</body>
+</html>
+

@@ -10,6 +10,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy app code
 COPY ./app ./app
 
+# Copy settings so "from settings import settings" works
+COPY settings.py ./
+
 # Expose port (FastAPI default)
 EXPOSE 8000
 

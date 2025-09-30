@@ -1,62 +1,26 @@
 from __future__ import annotations
-from typing import List, Literal, Optional
+from typing import List, Optional, Literal
 from uuid import uuid4
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal
 from datetime import date as Date
-from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel, field_validator
+from fastapi import APIRouter, HTTPException, Query, Depends
+from sqlalchemy import select, func, desc, case, and_
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.db import get_db
+from app.models import Expense
+from app.schemas import ExpenseIn, ExpenseOut, SummaryOut, chf
 
 router = APIRouter()
 
 Role = Literal["Mila", "MaPi"]
 Status = Literal["pending", "approved", "rejected"]
 
-def chf(amount: Decimal) -> Decimal:
-    # Banker's rounding can be confusing; use HALF_UP for family finance
-    return amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-
-class ExpenseIn(BaseModel):
-    date: Date
-    description: str
-    amount: Decimal
-    claimed_by: Role
-
-    @field_validator("amount")
-    @classmethod
-    def positive_amount(cls, v: Decimal) -> Decimal:
-        if v <= 0:
-            raise ValueError("amount must be > 0")
-        return chf(v)
-
-class ExpenseOut(ExpenseIn):
-    id: str
-    status: Status
-
-# Temporary in-memory store
-_DB: List[ExpenseOut] = [
-    ExpenseOut(
-        id="1",
-        date=Date.fromisoformat("2025-09-23"),
-        description="School supplies",
-        amount=Decimal("18.50"),
-        claimed_by="Mila",
-        status="pending",
-    ),
-    ExpenseOut(
-        id="2",
-        date=Date.fromisoformat("2025-09-22"),
-        description="Bus ticket",
-        amount=Decimal("3.20"),
-        claimed_by="MaPi",
-        status="approved",
-    ),
-]
-
-def _find(expense_id: str) -> ExpenseOut:
-    for e in _DB:
-        if e.id == expense_id:
-            return e
-    raise HTTPException(status_code=404, detail="Not found")
+def to_out(e: Expense) -> ExpenseOut:
+    return ExpenseOut(
+        id=e.id, date=e.date, description=e.description,
+        amount=Decimal(e.amount), claimed_by=e.claimed_by, status=e.status
+    )
 
 @router.get("/expenses", response_model=List[ExpenseOut])
 async def list_expenses(
@@ -64,63 +28,90 @@ async def list_expenses(
     claimed_by: Optional[Role] = Query(default=None),
     limit: int = Query(default=10, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
+    db: AsyncSession = Depends(get_db),
 ) -> List[ExpenseOut]:
-    items = _DB
+    stmt = select(Expense)
     if status:
-        items = [e for e in items if e.status == status]
+        stmt = stmt.where(Expense.status == status)
     if claimed_by:
-        items = [e for e in items if e.claimed_by == claimed_by]
-    items = sorted(items, key=lambda e: (e.date, e.id), reverse=True)
-    return items[offset: offset + limit]
+        stmt = stmt.where(Expense.claimed_by == claimed_by)
+    stmt = stmt.order_by(desc(Expense.date), desc(Expense.id)).offset(offset).limit(limit)
+    rows = (await db.execute(stmt)).scalars().all()
+    return [to_out(e) for e in rows]
 
 @router.post("/expenses", response_model=ExpenseOut)
-async def add_expense(body: ExpenseIn) -> ExpenseOut:
-    new = ExpenseOut(
+async def add_expense(body: ExpenseIn, db: AsyncSession = Depends(get_db)) -> ExpenseOut:
+    new = Expense(
         id=str(uuid4()),
         date=body.date,
         description=body.description.strip(),
-        amount=chf(body.amount),
+        amount=body.amount,  # validated & rounded by pydantic validator + chf
         claimed_by=body.claimed_by,
         status="approved" if body.claimed_by == "MaPi" else "pending",
     )
-    _DB.append(new)
-    return new
+    db.add(new)
+    await db.commit()
+    await db.refresh(new)
+    return to_out(new)
+
+async def _get_or_404(db: AsyncSession, expense_id: str) -> Expense:
+    e = await db.get(Expense, expense_id)
+    if not e:
+        raise HTTPException(status_code=404, detail="Not found")
+    return e
 
 @router.post("/expenses/{expense_id}/approve", response_model=ExpenseOut)
-async def approve_expense(expense_id: str) -> ExpenseOut:
-    e = _find(expense_id)
+async def approve_expense(expense_id: str, db: AsyncSession = Depends(get_db)) -> ExpenseOut:
+    e = await _get_or_404(db, expense_id)
     if e.claimed_by != "Mila":
         raise HTTPException(status_code=400, detail="Only Mila's claims require approval.")
     if e.status != "pending":
         raise HTTPException(status_code=409, detail=f"Cannot approve from state {e.status}.")
-    e.status = "approved"  # type: ignore
-    return e
+    e.status = "approved"
+    await db.commit()
+    await db.refresh(e)
+    return to_out(e)
 
 @router.post("/expenses/{expense_id}/reject", response_model=ExpenseOut)
-async def reject_expense(expense_id: str) -> ExpenseOut:
-    e = _find(expense_id)
+async def reject_expense(expense_id: str, db: AsyncSession = Depends(get_db)) -> ExpenseOut:
+    e = await _get_or_404(db, expense_id)
     if e.claimed_by != "Mila":
         raise HTTPException(status_code=400, detail="Only Mila's claims can be rejected.")
     if e.status != "pending":
         raise HTTPException(status_code=409, detail=f"Cannot reject from state {e.status}.")
-    e.status = "rejected"  # type: ignore
-    return e
-
-class SummaryOut(BaseModel):
-    currency: Literal["CHF"] = "CHF"
-    approved_total_mapi_claims: Decimal
-    approved_total_mila_claims: Decimal
-    net_balance_for_mila: Decimal  # >0 => Mila owes MaPi
+    e.status = "rejected"
+    await db.commit()
+    await db.refresh(e)
+    return to_out(e)
 
 @router.get("/summary", response_model=SummaryOut)
-async def summary() -> SummaryOut:
-    mapi_approved = sum((e.amount for e in _DB if e.claimed_by == "MaPi" and e.status == "approved"), Decimal("0"))
-    mila_approved = sum((e.amount for e in _DB if e.claimed_by == "Mila" and e.status == "approved"), Decimal("0"))
-    mapi_approved = chf(mapi_approved)
-    mila_approved = chf(mila_approved)
-    net_for_mila = chf(mapi_approved - mila_approved)
+async def summary(db: AsyncSession = Depends(get_db)) -> SummaryOut:
+    q = select(
+        func.coalesce(
+            func.sum(case((Expense.claimed_by == "MaPi", Expense.amount), else_=0)), 0
+        ),
+        func.coalesce(
+            func.sum(case((and_(Expense.claimed_by == "Mila", Expense.status == "approved"), Expense.amount), else_=0)), 0
+        ),
+        func.coalesce(
+            func.sum(case((and_(Expense.claimed_by == "Mila", Expense.status == "pending"), Expense.amount), else_=0)), 0
+        ),
+        func.coalesce(
+            func.sum(case((and_(Expense.claimed_by == "Mila", Expense.status == "pending"), 1), else_=0)), 0
+        ),
+    )
+
+    mapi_approved, mila_approved, mila_pending, mila_pending_count = (await db.execute(q)).one()
+
+    mapi_approved = chf(Decimal(mapi_approved))
+    mila_approved = chf(Decimal(mila_approved))
+    mila_pending  = chf(Decimal(mila_pending))
+    net_for_mila  = chf(mapi_approved - mila_approved)
+
     return SummaryOut(
         approved_total_mapi_claims=mapi_approved,
         approved_total_mila_claims=mila_approved,
         net_balance_for_mila=net_for_mila,
+        pending_total_mila_claims=mila_pending,
+        pending_count_mila_claims=int(mila_pending_count),
     )

@@ -36,93 +36,39 @@ If you see `'docker' is not recognized as the name of a cmdlet...`, it means Doc
 3. After installation, restart your terminal or command prompt.
 4. Run `docker --version` to verify the installation.
 
-Now you can use Docker commands like `docker build` and `docker run`.
-
-# Running as a Container App on Azure
-
-To deploy this FastAPI backend as a container app on Azure:
-
-1. **Add a Dockerfile** to the backend directory (see project root or backend/).
-2. **Build the Docker image:**
-   ```bash
-   docker build -t my-fastapi-app .
-   ```
-3. **Test locally (optional):**
-   ```bash
-   docker run -p 8000:8000 my-fastapi-app
-   ```
-4. **Push the image to a container registry** (e.g., Azure Container Registry or Docker Hub).
-5. **Create an Azure Container App** and configure it to use your image.
-6. **Set environment variables and networking as needed in Azure Portal.**
-
-See [Azure Container Apps documentation](https://learn.microsoft.com/en-us/azure/container-apps/) for detailed steps.
-
-# Testing the Docker Container Locally
-
-To test your FastAPI backend container locally:
-
-1. Open a terminal and navigate to the `backend` directory:
-   ```bash
-   cd path/to/Mila_Expense_Tracker/backend
-   ```
-
-2. Build the Docker image:
-   ```bash
-   docker build -t my-fastapi-app .
-   ```
-
-3. Run the container:
-   ```bash
-   docker run -p 8000:8000 my-fastapi-app
-   ```
-
-4. Open your browser and go to [http://localhost:8000/docs](http://localhost:8000/docs) to access the FastAPI interactive API docs.
-
-
-Application URL:
-https://fastapi-app.icywave-1777a797.westeurope.azurecontainerapps.io
-
-http://localhost:8000/docs#/
-
-az acr create --resource-group TinyApps --name tinyappexptrack --sku Basic
-
-
-az acr login --name tinyappexptrack
-
-docker tag my-fastapi-app tinyappexptrack.azurecr.io/my-fastapi-app:latest
-docker push tinyappexptrack.azurecr.io/my-fastapi-app:latest
-
-az containerapp env create --name tinyapps-env --resource-group TinyApps --location westeurope
-
-az containerapp create `
-  --name expense-tracker-api `
-  --resource-group TinyApps `
-  --environment tinyapps-env `
-  --image tinyappexptrack.azurecr.io/my-fastapi-app:latest `
-  --registry-server tinyappexptrack.azurecr.io `
-  --target-port 8000 `
-  --ingress external
 
 https://fastapi-app.wittysand-ac101e81.westeurope.azurecontainerapps.io
 https://fastapi-app.wittysand-ac101e81.westeurope.azurecontainerapps.io/docs
 
 
-
-# -> to be done for new push to Azure
 # --------------------------------------
+# build of docker
 
-# from your backend repo root
-docker build -t my-fastapi-app:$(git rev-parse --short HEAD) .
-# if you’re on Apple Silicon and your base image is amd64:
-# docker build --platform linux/amd64 -t my-fastapi-app:$(git rev-parse --short HEAD) .
+# --- config variables (set once) ---
+$ACR = "tinyappexptrack"                        # your ACR name (no domain)
+$IMG = "mila-expense-tracker-api"               # repository name in ACR
+$TAG = (Get-Date -Format "yyyyMMdd-HHmmss")     # unique version tag; or set manually
 
-az acr login --name tinyappexptrack
+# --- 1) build fresh ---
+docker build --pull --no-cache -t "${IMG}:dev" -t "${IMG}:latest" .
 
-TAG=$(git rev-parse --short HEAD)
-docker tag my-fastapi-app:$TAG tinyappexptrack.azurecr.io/my-fastapi-app:$TAG
-docker push tinyappexptrack.azurecr.io/my-fastapi-app:$TAG
+# --- 2) test locally ---
+docker run --rm -p 8000:8000 --name mila-api ${IMG}:latest
+# (Ctrl+C when you're done testing)
 
-az containerapp update \
-  --name expense-tracker-api \
-  --resource-group TinyApps \
-  --image tinyappexptrack.azurecr.io/my-fastapi-app:$TAG
+# --- 3) login to ACR (logs Docker into the registry) ---
+az acr login --name ${ACR}
+
+# --- 4) tag for ACR (both unique and 'latest') ---
+docker tag ${IMG}:latest "$ACR.azurecr.io/${IMG}:${TAG}"
+docker tag ${IMG}:latest "$ACR.azurecr.io/${IMG}:latest"
+
+# --- 5) push to ACR ---
+docker push "${ACR}.azurecr.io/${IMG}:${TAG}"
+docker push "${ACR}.azurecr.io/${IMG}:latest"
+
+# --- 6) update Container App to the new, versioned image ---
+az containerapp update `
+  --name expense-tracker-api `
+  --resource-group TinyApps `
+  --image "$ACR.azurecr.io/${IMG}:${TAG}"
